@@ -31,12 +31,20 @@ export function verifyToken(token: string): TokenPayload | null {
 }
 
 export async function getUserFromToken(token: string) {
-  const payload = verifyToken(token)
-  if (!payload) return null
-  
-  const user = await prisma.user.findUnique({
-    where: { id: payload.userId }
-  })
-  
-  return user
+  try {
+    const payload = verifyToken(token)
+    if (!payload) return null
+
+    const user = await prisma.user.findUnique({
+      where: { id: payload.userId }
+    })
+
+    return user
+  } catch (error: any) {
+    console.error('Error getting user from token:', error)
+    if (error?.message?.includes('closed the connection') || error?.code === 'P1017') {
+      throw new Error('Database connection failed. Please try again.')
+    }
+    return null
+  }
 }

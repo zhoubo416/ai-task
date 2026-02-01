@@ -12,7 +12,6 @@ export default defineEventHandler(async (event) => {
     const body = await readBody(event)
     const { username, password } = registerSchema.parse(body)
 
-    // 检查用户名是否已存在
     const existingUser = await prisma.user.findUnique({
       where: { username }
     })
@@ -24,7 +23,6 @@ export default defineEventHandler(async (event) => {
       })
     }
 
-    // 创建用户
     const hashedPassword = await hashPassword(password)
     const user = await prisma.user.create({
       data: {
@@ -35,7 +33,6 @@ export default defineEventHandler(async (event) => {
       }
     })
 
-    // 生成token
     const token = generateToken({
       userId: user.id,
       username: user.username,
@@ -55,6 +52,12 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     if (error.statusCode) {
       throw error
+    }
+    if (error?.message?.includes('closed the connection') || error?.code === 'P1017') {
+      throw createError({
+        statusCode: 503,
+        message: '数据库连接失败，请稍后再试'
+      })
     }
     throw createError({
       statusCode: 400,

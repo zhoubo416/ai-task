@@ -9,107 +9,121 @@ const chatSchema = z.object({
     role: z.enum(['user', 'assistant']),
     content: z.string()
   })).default([]),
-  attemptId: z.string().optional()
+  attemptId: z.string().nullable().optional()
 })
 
 export default defineEventHandler(async (event) => {
-  const token = getCookie(event, 'auth-token') || getHeader(event, 'authorization')?.replace('Bearer ', '')
-  
-  if (!token) {
-    throw createError({
-      statusCode: 401,
-      message: '未登录'
-    })
-  }
-
-  const user = await getUserFromToken(token)
-  
-  if (!user) {
-    throw createError({
-      statusCode: 401,
-      message: '无效的token'
-    })
-  }
-
-  const taskId = getRouterParam(event, 'id')
-  
-  const task = await prisma.task.findUnique({
-    where: { id: taskId }
-  })
-
-  if (!task) {
-    throw createError({
-      statusCode: 404,
-      message: '任务不存在'
-    })
-  }
-
   try {
-    const body = await readBody(event)
-    const { message, conversation, attemptId } = chatSchema.parse(body)
-
-    let attempt = attemptId
-      ? await prisma.taskCompletion.findFirst({
-          where: { id: attemptId, userId: user.id, taskId: task.id }
-        })
-      : null
-
-    if (!attempt) {
-      attempt = await prisma.taskCompletion.create({
-        data: {
-          userId: user.id,
-          taskId: task.id,
-          status: 'pending',
-          conversation: JSON.stringify(conversation)
-        }
+    const token = getCookie(event, 'auth-token') || getHeader(event, 'authorization')?.replace('Bearer ', '')
+    
+    if (!token) {
+      throw createError({
+        statusCode: 401,
+        message: '未登录'
       })
     }
 
-    let baseConversation = conversation
-    if (attempt.conversation) {
-      try {
-        baseConversation = JSON.parse(attempt.conversation)
-      } catch {
-        baseConversation = conversation
-      }
+    const user = await getUserFromToken(token)
+    
+    if (!user) {
+      throw createError({
+        statusCode: 401,
+        message: '无效的token'
+      })
     }
 
-    // 添加用户消息到对话
-    const updatedConversation = [
-      ...baseConversation,
-      { role: 'user' as const, content: message }
-    ]
-
-    // 获取AI回复
-    const aiResponse = await chatWithAI(
-      task.role,
-      task.goal,
-      updatedConversation
-    )
-
-    // 添加AI回复到对话
-    const finalConversation = [
-      ...updatedConversation,
-      { role: 'assistant' as const, content: aiResponse }
-    ]
-
-    await prisma.taskCompletion.update({
-      where: { id: attempt.id },
-      data: {
-        conversation: JSON.stringify(finalConversation),
-        status: 'pending'
-      }
+    const taskId = getRouterParam(event, 'id')
+    
+    const task = await prisma.task.findUnique({
+      where: { id: taskId }
     })
 
-    return {
-      success: true,
-      response: aiResponse,
-      conversation: finalConversation,
-      attemptId: attempt.id
+    if (!task) {
+      throw createError({
+        statusCode: 404,
+        message: '任务不存在'
+      })
+    }
+
+    try {
+      const body = await readBody(event)
+      const { message, conversation, attemptId } = chatSchema.parse(body)
+
+      let attempt = attemptId
+        ? await prisma.taskCompletion.findFirst({
+            where: { id: attemptId, userId: user.id, taskId: task.id }
+          })
+        : null
+
+      if (!attempt) {
+        attempt = await prisma.taskCompletion.create({
+          data: {
+            userId: user.id,
+            taskId: task.id,
+            status: 'pending',
+            conversation: JSON.stringify(conversation)
+          }
+        })
+      }
+
+      let baseConversation = conversation
+      if (attempt.conversation) {
+        try {
+          baseConversation = JSON.parse(attempt.conversation)
+        } catch {
+          baseConversation = conversation
+        }
+      }
+
+      const updatedConversation = [
+        ...baseConversation,
+        { role: 'user' as const, content: message }
+      ]
+
+      const aiResponse = await chatWithAI(
+        task.role,
+        task.goal,
+        updatedConversation
+      )
+
+      const finalConversation = [
+        ...updatedConversation,
+        { role: 'assistant' as const, content: aiResponse }
+      ]
+
+      await prisma.taskCompletion.update({
+        where: { id: attempt.id },
+        data: {
+          conversation: JSON.stringify(finalConversation),
+          status: 'pending'
+        }
+      })
+
+      return {
+        success: true,
+        response: aiResponse,
+        conversation: finalConversation,
+        attemptId: attempt.id
+      }
+    } catch (dbError: any) {
+      if (dbError?.message?.includes('does not exist') || dbError?.code === 'P1017' || dbError?.message?.includes('closed the connection')) {
+        console.error('Database error:', dbError)
+        throw createError({
+          statusCode: 503,
+          message: '数据库暂不可用，请稍后再试'
+        })
+      }
+      throw dbError
     }
   } catch (error: any) {
     if (error.statusCode) {
       throw error
+    }
+    if (error?.message?.includes('closed the connection') || error?.code === 'P1017') {
+      throw createError({
+        statusCode: 503,
+        message: '数据库暂不可用，请稍后再试'
+      })
     }
     throw createError({
       statusCode: 500,

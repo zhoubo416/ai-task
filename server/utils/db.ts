@@ -1,7 +1,9 @@
 import { PrismaClient } from '@prisma/client'
 
 const prismaClientSingleton = () => {
-  return new PrismaClient()
+  return new PrismaClient({
+    log: ['error']
+  })
 }
 
 declare const globalThis: {
@@ -10,14 +12,20 @@ declare const globalThis: {
 
 const prisma = globalThis.prismaGlobal ?? prismaClientSingleton()
 
-// Neon/PG 可能会回收空闲连接，遇到 P1017 时自动重连并重试一次
 prisma.$use(async (params, next) => {
   try {
     return await next(params)
   } catch (err: any) {
-    if (err?.code === 'P1017') {
-      await prisma.$connect()
-      return await next(params)
+    if (err?.code === 'P1017' || err?.message?.includes('closed the connection')) {
+      try {
+        await prisma.$disconnect()
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        await prisma.$connect()
+        return await next(params)
+      } catch (reconnectErr) {
+        console.error('Database reconnection failed:', reconnectErr)
+        throw new Error('Database connection failed. Please try again.')
+      }
     }
     throw err
   }

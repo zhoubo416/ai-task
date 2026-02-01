@@ -42,10 +42,7 @@ model TaskCompletion {
   taskId      String
   points      Int      @default(0)
   conversation String? // 对话记录JSON
-  score       Int?
-  feedback    String?
   status      String   @default("pending") // pending, completed, failed
-  completedAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   

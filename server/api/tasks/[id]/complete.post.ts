@@ -8,42 +8,42 @@ const completeSchema = z.object({
     role: z.enum(['user', 'assistant']),
     content: z.string()
   })),
-  attemptId: z.string().optional()
+  attemptId: z.string().nullable().optional()
 })
 
 export default defineEventHandler(async (event) => {
-  const token = getCookie(event, 'auth-token') || getHeader(event, 'authorization')?.replace('Bearer ', '')
-  
-  if (!token) {
-    throw createError({
-      statusCode: 401,
-      message: '未登录'
-    })
-  }
-
-  const user = await getUserFromToken(token)
-  
-  if (!user) {
-    throw createError({
-      statusCode: 401,
-      message: '无效的token'
-    })
-  }
-
-  const taskId = getRouterParam(event, 'id')
-  
-  const task = await prisma.task.findUnique({
-    where: { id: taskId }
-  })
-
-  if (!task) {
-    throw createError({
-      statusCode: 404,
-      message: '任务不存在'
-    })
-  }
-
   try {
+    const token = getCookie(event, 'auth-token') || getHeader(event, 'authorization')?.replace('Bearer ', '')
+    
+    if (!token) {
+      throw createError({
+        statusCode: 401,
+        message: '未登录'
+      })
+    }
+
+    const user = await getUserFromToken(token)
+    
+    if (!user) {
+      throw createError({
+        statusCode: 401,
+        message: '无效的token'
+      })
+    }
+
+    const taskId = getRouterParam(event, 'id')
+    
+    const task = await prisma.task.findUnique({
+      where: { id: taskId }
+    })
+
+    if (!task) {
+      throw createError({
+        statusCode: 404,
+        message: '任务不存在'
+      })
+    }
+
     const body = await readBody(event)
     const { conversation, attemptId } = completeSchema.parse(body)
 
@@ -64,14 +64,12 @@ export default defineEventHandler(async (event) => {
       })
     }
 
-    // AI评估任务完成情况
     const evaluation = await evaluateTaskCompletion(
       task.role,
       task.goal,
       conversation
     )
 
-    // 计算积分（根据完成度和最大积分）
     const rawPoints = Math.floor((evaluation.score / 100) * task.maxPoints)
 
     const existingCompletion = await prisma.taskCompletion.findFirst({
@@ -89,15 +87,11 @@ export default defineEventHandler(async (event) => {
       where: { id: attempt.id },
       data: {
         points,
-        score: evaluation.score,
-        feedback: evaluation.feedback,
         conversation: JSON.stringify(conversation),
-        status: evaluation.completed ? 'completed' : 'failed',
-        completedAt: new Date()
+        status: evaluation.completed ? 'completed' : 'failed'
       }
     })
 
-    // 如果完成，更新用户积分
     if (evaluation.completed && points > 0) {
       await prisma.user.update({
         where: { id: user.id },
@@ -119,6 +113,12 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     if (error.statusCode) {
       throw error
+    }
+    if (error?.message?.includes('closed the connection') || error?.code === 'P1017') {
+      throw createError({
+        statusCode: 503,
+        message: '数据库暂不可用，请稍后再试'
+      })
     }
     throw createError({
       statusCode: 500,
